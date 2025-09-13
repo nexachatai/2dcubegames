@@ -7,131 +7,92 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap" rel="stylesheet">
     <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, collection, onSnapshot, addDoc, query, orderBy, serverTimestamp, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // Global variables for Firebase
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-
-        // --- Firebase Initialization and Authentication ---
-        let db;
-        let auth;
+        // Local Leaderboard System (fallback when Firebase is not available)
         let userId = null;
         let isAuthReady = false;
+        let useLocalStorage = true;
 
         const leaderboardStatus = document.getElementById('leaderboardStatus');
         const userIdDisplay = document.getElementById('userIdDisplay');
 
-        // Set Firestore log level for debugging
-        setLogLevel('debug');
-
-        try {
-            const app = initializeApp(firebaseConfig);
-            db = getFirestore(app);
-            auth = getAuth(app);
-            
-            onAuthStateChanged(auth, async (user) => {
-                if (user) {
-                    userId = user.uid;
-                } else {
-                    userId = crypto.randomUUID(); // Fallback for anonymous
-                }
-                isAuthReady = true;
-                userIdDisplay.textContent = userId;
-                leaderboardStatus.textContent = 'Loading scores...';
-                setupLeaderboardListener();
-            });
-
-            if (initialAuthToken) {
-                await signInWithCustomToken(auth, initialAuthToken);
-            } else {
-                await signInAnonymously(auth);
-            }
-
-        } catch (error) {
-            console.error("Firebase initialization or authentication failed:", error);
-            leaderboardStatus.textContent = 'Failed to connect to leaderboard.';
+        // Initialize local leaderboard system
+        function initializeLocalLeaderboard() {
+            userId = localStorage.getItem('gameUserId') || crypto.randomUUID();
+            localStorage.setItem('gameUserId', userId);
+            isAuthReady = true;
+            userIdDisplay.textContent = `Player ${userId.substring(0, 8)}`;
+            leaderboardStatus.textContent = 'Local Leaderboard';
+            setupLocalLeaderboardListener();
         }
 
-        // --- Leaderboard Functions with Firestore ---
-        function setupLeaderboardListener() {
+        // Initialize the leaderboard system
+        initializeLocalLeaderboard();
+
+        // --- Local Leaderboard Functions ---
+        function setupLocalLeaderboardListener() {
             if (!isAuthReady) return;
-
-            const publicScoresPath = `artifacts/${appId}/public/data/scores`;
-            const scoresCollection = collection(db, publicScoresPath);
-            const scoresQuery = query(scoresCollection, orderBy('score', 'desc'));
-
-            onSnapshot(scoresQuery, (snapshot) => {
-                const scores = [];
-                snapshot.forEach((doc) => {
-                    const data = doc.data();
-                    const userName = data.userId === userId ? `You (${data.name})` : data.name;
-                    scores.push({
-                        id: doc.id,
-                        name: userName,
-                        score: data.score
-                    });
-                });
-                renderLeaderboard(scores);
-            }, (error) => {
-                console.error("Error fetching leaderboard data:", error);
-                leaderboardStatus.textContent = 'Failed to load scores.';
-            });
+            loadAndRenderLeaderboard();
         }
         
-        async function saveHighScore(newScore) {
+        function loadAndRenderLeaderboard() {
+            const scores = getLocalScores();
+            renderLeaderboard(scores);
+        }
+        
+        function getLocalScores() {
+            const scoresData = localStorage.getItem('gameLeaderboard');
+            if (!scoresData) return [];
+            
+            try {
+                const scores = JSON.parse(scoresData);
+                return scores.map(score => ({
+                    ...score,
+                    name: score.userId === userId ? `You (${score.name})` : score.name
+                }));
+            } catch (e) {
+                console.error('Error parsing leaderboard data:', e);
+                return [];
+            }
+        }
+        
+        function saveHighScore(newScore) {
             if (!isAuthReady) {
-                console.error("Authentication not ready. Cannot save score.");
+                console.error("System not ready. Cannot save score.");
                 return;
             }
         
-            const publicScoresPath = `artifacts/${appId}/public/data/scores`;
-            const scoresCollection = collection(db, publicScoresPath);
-            let userName;
-            if (auth.currentUser && !auth.currentUser.isAnonymous) {
-                userName = auth.currentUser.displayName || auth.currentUser.email || `Player`;
-            } else {
-                userName = `User ${userId.substring(0, 4)}`;
-            }
-        
-            try {
-                // Check if user already has a score. If so, update it if the new score is higher.
-                const q = query(scoresCollection);
-                const querySnapshot = await getDocs(q);
-                let existingScoreFound = false;
-        
-                querySnapshot.forEach(async (doc) => {
-                    if (doc.data().userId === userId) {
-                        existingScoreFound = true;
-                        if (newScore > doc.data().score) {
-                            // Update existing document with new high score
-                            await addDoc(scoresCollection, {
-                                userId: userId,
-                                name: userName,
-                                score: newScore,
-                                timestamp: serverTimestamp()
-                            });
-                        }
-                    }
-                });
-        
-                // If no existing score, add a new one
-                if (!existingScoreFound) {
-                    await addDoc(scoresCollection, {
-                        userId: userId,
-                        name: userName,
-                        score: newScore,
-                        timestamp: serverTimestamp()
-                    });
+            const userName = `Player ${userId.substring(0, 8)}`;
+            let scores = getLocalScores();
+            
+            // Find existing user score
+            const existingScoreIndex = scores.findIndex(score => score.userId === userId);
+            
+            if (existingScoreIndex !== -1) {
+                // Update existing score if new score is higher
+                if (newScore > scores[existingScoreIndex].score) {
+                    scores[existingScoreIndex].score = newScore;
+                    scores[existingScoreIndex].timestamp = Date.now();
                 }
-        
-            } catch (e) {
-                console.error("Error adding document to Firestore: ", e);
+            } else {
+                // Add new score
+                scores.push({
+                    userId: userId,
+                    name: userName,
+                    score: newScore,
+                    timestamp: Date.now()
+                });
             }
+            
+            // Keep only top 10 scores
+            scores.sort((a, b) => b.score - a.score);
+            scores = scores.slice(0, 10);
+            
+            // Save to localStorage
+            localStorage.setItem('gameLeaderboard', JSON.stringify(scores));
+            
+            // Refresh the leaderboard display
+            loadAndRenderLeaderboard();
         }
         
         function renderLeaderboard(scores) {
@@ -182,14 +143,14 @@
         <!-- Leaderboard Sidebar -->
         <div id="leaderboard" class="bg-slate-800 rounded-lg p-6 shadow-2xl w-80 h-[600px] flex flex-col justify-between">
             <div>
-                <h3 class="text-2xl font-bold text-teal-400 mb-4">Online Leaderboard</h3>
+                <h3 class="text-2xl font-bold text-teal-400 mb-4">Local Leaderboard</h3>
                 <p id="leaderboardStatus" class="text-slate-400 text-center text-sm mb-4">Loading scores...</p>
                 <ul id="scoreList" class="space-y-2">
                     <!-- Scores will be dynamically inserted here -->
                 </ul>
             </div>
             <div class="text-right text-sm text-slate-500 mt-4">
-                <p>Scores are stored online.</p>
+                <p>Scores are stored locally.</p>
             </div>
         </div>
 
@@ -221,6 +182,9 @@
 
                     <button id="pauseBtn" class="pointer-events-auto bg-slate-800/80 rounded-lg px-4 py-2 text-white hover:bg-slate-700/80 transition-colors duration-200">
                         Pause
+                    </button>
+                    <button id="shopBtn" class="pointer-events-auto bg-yellow-600/80 rounded-lg px-4 py-2 text-white hover:bg-yellow-500/80 transition-colors duration-200">
+                        Shop
                     </button>
                     <div id="fpsCounter" class="bg-slate-800/80 rounded-lg px-4 py-2 hidden">
                         <span class="text-teal-400 font-bold">FPS: </span>
@@ -294,6 +258,69 @@
                 </div>
             </div>
             
+            <!-- Shop Screen -->
+            <div id="shopScreen" class="absolute inset-0 bg-slate-900/90 flex items-center justify-center hidden">
+                <div class="bg-slate-800 rounded-2xl p-8 text-center shadow-2xl space-y-6 max-w-2xl w-full mx-4">
+                    <h2 class="text-4xl font-extrabold text-yellow-400">Premium Shop</h2>
+                    <p class="text-lg text-slate-300">Unlock premium features and support development!</p>
+                    
+                    <!-- Premium Status -->
+                    <div id="premiumStatus" class="bg-slate-700 rounded-lg p-4">
+                        <p class="text-slate-300">Status: <span id="userPremiumStatus" class="font-bold text-red-400">Free User</span></p>
+                    </div>
+                    
+                    <!-- Premium Features -->
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div class="bg-slate-700 rounded-lg p-4 space-y-3">
+                            <h3 class="text-xl font-bold text-teal-400">Premium Skins</h3>
+                            <div class="space-y-2">
+                                <div class="flex justify-between items-center">
+                                    <span class="text-slate-300">Golden Cube</span>
+                                    <span id="goldenSkinStatus" class="text-red-400 text-sm">🔒 Premium</span>
+                                </div>
+                                <div class="flex justify-between items-center">
+                                    <span class="text-slate-300">Rainbow Cube</span>
+                                    <span id="rainbowSkinStatus" class="text-red-400 text-sm">🔒 Premium</span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="bg-slate-700 rounded-lg p-4 space-y-3">
+                            <h3 class="text-xl font-bold text-teal-400">Premium Features</h3>
+                            <div class="space-y-2">
+                                <div class="flex justify-between items-center">
+                                    <span class="text-slate-300">Shield Power-up</span>
+                                    <span id="shieldStatus" class="text-red-400 text-sm">🔒 Premium</span>
+                                </div>
+                                <div class="flex justify-between items-center">
+                                    <span class="text-slate-300">Slow Motion</span>
+                                    <span id="slowMoStatus" class="text-red-400 text-sm">🔒 Premium</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Purchase Section -->
+                    <div class="bg-gradient-to-r from-yellow-600 to-yellow-500 rounded-lg p-6 space-y-4">
+                        <h3 class="text-2xl font-bold text-slate-900">Get Premium Access</h3>
+                        <p class="text-slate-800">Unlock all premium features for just $5!</p>
+                        <a href="https://paypal.me/nexachatai/5" target="_blank" class="inline-block w-full bg-slate-900 hover:bg-slate-800 text-yellow-400 font-bold py-3 px-8 rounded-full transition-all duration-300 transform hover:scale-105 shadow-lg active:scale-95">
+                            💳 Purchase Premium - $5
+                        </a>
+                        <p class="text-xs text-slate-700">After payment, refresh the page to activate premium features</p>
+                    </div>
+                    
+                    <div class="flex gap-4">
+                        <button id="closeShopBtn" class="flex-1 bg-slate-600 hover:bg-slate-500 text-slate-200 font-bold py-3 px-8 rounded-full transition-all duration-300 transform hover:scale-105 shadow-lg active:scale-95">
+                            Close
+                        </button>
+                        <button id="activatePremiumBtn" class="flex-1 bg-green-600 hover:bg-green-500 text-white font-bold py-3 px-8 rounded-full transition-all duration-300 transform hover:scale-105 shadow-lg active:scale-95">
+                            I've Paid - Activate Premium
+                        </button>
+                    </div>
+                </div>
+            </div>
+            
             <!-- Start Screen -->
             <div id="startScreen" class="absolute inset-0 bg-slate-900/90 flex items-center justify-center">
                 <div class="bg-slate-800 rounded-2xl p-8 text-center shadow-2xl space-y-6">
@@ -337,6 +364,15 @@
         const moveLeftBtn = document.getElementById('moveLeftBtn');
         const moveRightBtn = document.getElementById('moveRightBtn');
         const healthBarFill = document.getElementById('healthBarFill');
+        const shopBtn = document.getElementById('shopBtn');
+        const shopScreen = document.getElementById('shopScreen');
+        const closeShopBtn = document.getElementById('closeShopBtn');
+        const activatePremiumBtn = document.getElementById('activatePremiumBtn');
+        const userPremiumStatus = document.getElementById('userPremiumStatus');
+        const goldenSkinStatus = document.getElementById('goldenSkinStatus');
+        const rainbowSkinStatus = document.getElementById('rainbowSkinStatus');
+        const shieldStatus = document.getElementById('shieldStatus');
+        const slowMoStatus = document.getElementById('slowMoStatus');
 
         // Initialize Tone.js for audio effects
         const scoreSynth = new Tone.Synth({
@@ -373,16 +409,29 @@
             Tone.Destination.volume.value = dbValue;
         }
 
+        // Audio timing management
+        let lastAudioTime = 0;
+        const minAudioInterval = 0.05; // 50ms minimum between sounds
+
         function playScoreSound() {
-            scoreSynth.triggerAttackRelease("C5", "8n");
+            const now = Tone.now();
+            const audioTime = Math.max(now, lastAudioTime + minAudioInterval);
+            scoreSynth.triggerAttackRelease("C5", "8n", audioTime);
+            lastAudioTime = audioTime;
         }
 
         function playHitSound() {
-            hitSynth.triggerAttackRelease("16n");
+            const now = Tone.now();
+            const audioTime = Math.max(now, lastAudioTime + minAudioInterval);
+            hitSynth.triggerAttackRelease("16n", audioTime);
+            lastAudioTime = audioTime;
         }
 
         function playGameOverSound() {
-            gameOverSynth.triggerAttackRelease("C2", "4n");
+            const now = Tone.now();
+            const audioTime = Math.max(now, lastAudioTime + minAudioInterval);
+            gameOverSynth.triggerAttackRelease("C2", "4n", audioTime);
+            lastAudioTime = audioTime;
         }
         
         // Game state
@@ -399,6 +448,53 @@
         const fpsHistory = [];
         const FPS_HISTORY_SIZE = 60;
         
+        // Premium System
+        let isPremiumUser = false;
+        let currentSkin = 'default';
+        let hasShield = false;
+        let shieldDuration = 0;
+        let slowMotionActive = false;
+        let slowMotionDuration = 0;
+        
+        // Premium System Functions
+        function checkPremiumStatus() {
+            isPremiumUser = localStorage.getItem('premiumUser') === 'true';
+            updatePremiumUI();
+        }
+        
+        function updatePremiumUI() {
+            if (isPremiumUser) {
+                userPremiumStatus.textContent = 'Premium User';
+                userPremiumStatus.className = 'font-bold text-green-400';
+                goldenSkinStatus.innerHTML = '✅ Unlocked';
+                goldenSkinStatus.className = 'text-green-400 text-sm';
+                rainbowSkinStatus.innerHTML = '✅ Unlocked';
+                rainbowSkinStatus.className = 'text-green-400 text-sm';
+                shieldStatus.innerHTML = '✅ Unlocked';
+                shieldStatus.className = 'text-green-400 text-sm';
+                slowMoStatus.innerHTML = '✅ Unlocked';
+                slowMoStatus.className = 'text-green-400 text-sm';
+            } else {
+                userPremiumStatus.textContent = 'Free User';
+                userPremiumStatus.className = 'font-bold text-red-400';
+                goldenSkinStatus.innerHTML = '🔒 Premium';
+                goldenSkinStatus.className = 'text-red-400 text-sm';
+                rainbowSkinStatus.innerHTML = '🔒 Premium';
+                rainbowSkinStatus.className = 'text-red-400 text-sm';
+                shieldStatus.innerHTML = '🔒 Premium';
+                shieldStatus.className = 'text-red-400 text-sm';
+                slowMoStatus.innerHTML = '🔒 Premium';
+                slowMoStatus.className = 'text-red-400 text-sm';
+            }
+        }
+        
+        function activatePremium() {
+            localStorage.setItem('premiumUser', 'true');
+            isPremiumUser = true;
+            updatePremiumUI();
+            alert('Premium features activated! Enjoy your new powers!');
+        }
+        
         // Player object
         const player = {
             x: canvas.width / 2 - 15,
@@ -407,6 +503,28 @@
             height: 30,
             color: '#14b8a6'
         };
+        
+        // Premium skin colors
+        const skins = {
+            default: '#14b8a6',
+            golden: '#ffd700',
+            rainbow: null // Special handling for rainbow
+        };
+        
+        function getPlayerColor() {
+            if (!isPremiumUser) return skins.default;
+            
+            if (currentSkin === 'rainbow') {
+                // Rainbow effect based on time
+                const time = Date.now() * 0.005;
+                const r = Math.sin(time) * 127 + 128;
+                const g = Math.sin(time + 2) * 127 + 128;
+                const b = Math.sin(time + 4) * 127 + 128;
+                return `rgb(${Math.floor(r)}, ${Math.floor(g)}, ${Math.floor(b)})`;
+            }
+            
+            return skins[currentSkin] || skins.default;
+        }
         
         // Cubes array
         let cubes = [];
