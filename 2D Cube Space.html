@@ -679,14 +679,27 @@
 
         // Draw the player as a spaceship
         function drawPlayer(ctx, player) {
-            ctx.fillStyle = player.color;
-            ctx.shadowColor = player.color;
+            const playerColor = getPlayerColor();
+            ctx.fillStyle = playerColor;
+            ctx.shadowColor = playerColor;
             ctx.shadowBlur = 10;
             
             const pX = player.x;
             const pY = player.y;
             const pW = player.width;
             const pH = player.height;
+
+            // Draw shield if active
+            if (hasShield && shieldDuration > 0) {
+                ctx.strokeStyle = '#00ffff';
+                ctx.lineWidth = 3;
+                ctx.shadowColor = '#00ffff';
+                ctx.shadowBlur = 15;
+                ctx.beginPath();
+                ctx.arc(pX + pW/2, pY + pH/2, pW + 10, 0, Math.PI * 2);
+                ctx.stroke();
+                ctx.shadowBlur = 10;
+            }
 
             // Main body (the original cube)
             ctx.fillRect(pX, pY, pW, pH);
@@ -929,6 +942,23 @@
         restartBtn.addEventListener('click', startGame);
         pauseBtn.addEventListener('click', togglePause);
         resumeBtn.addEventListener('click', togglePause);
+        
+        // Shop event listeners
+        shopBtn.addEventListener('click', () => {
+            shopScreen.classList.remove('hidden');
+            if (gameRunning && !isPaused) {
+                togglePause();
+            }
+        });
+        
+        closeShopBtn.addEventListener('click', () => {
+            shopScreen.classList.add('hidden');
+        });
+        
+        activatePremiumBtn.addEventListener('click', () => {
+            activatePremium();
+            shopScreen.classList.add('hidden');
+        });
         saveSettingsBtn.addEventListener('click', saveSettings);
 
         // Add event listener for volume slider
